@@ -1,0 +1,39 @@
+version: "3.8"
+
+# Development mode — hot reload, no production build needed
+# Usage: docker compose -f docker-compose.dev.yml up
+
+services:
+
+  topology_backend:
+    build: ./topology_backend
+    container_name: topology_backend_dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=development
+      - WG_IFACE=wg0
+      - WG_DIR=/etc/wireguard
+    volumes:
+      - ./topology_backend:/app
+      - /app/node_modules
+      - /etc/wireguard:/etc/wireguard
+    cap_add:
+      - NET_ADMIN
+    network_mode: host
+    command: sh -c "npm install && node server.js"
+
+  topology_frontend:
+    image: node:20-alpine
+    container_name: topology_frontend_dev
+    working_dir: /app
+    volumes:
+      - ./topology_frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - topology_backend
+    command: sh -c "npm install && npm run dev -- --host"

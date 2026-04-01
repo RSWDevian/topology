@@ -1,0 +1,29 @@
+version: '3.8'
+
+servces:
+  topology_backend:
+    build: ./topology_backend
+    container_name: topology_backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - WG_IFACE=wg0
+      - WG_DIR=/etc/wireguard
+    volumes:
+      - /etc/wireguard:/etc/wireguard
+      - /usr/bin/wg:/usr/bin/wg:ro
+      - /usr/bin/wg-quick:/usr/bin/wg-quick:ro
+    cap_add:
+      - NET_ADMIN
+    network_mode: host
+
+  topology_frontend:
+    build: ./topology_frontend
+    container_name: topology_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - topology_backend
