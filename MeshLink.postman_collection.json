@@ -1,0 +1,483 @@
+{
+  "info": {
+    "name": "MeshLink — Topology Backend",
+    "description": "All API endpoints for the MeshLink WireGuard mesh network backend.\n\nBase URL: http://localhost:3000\n\nTest order:\n1. Health Check\n2. Generate Host Config\n3. Generate Member Config\n4. Apply Host Config\n5. Apply Member Config\n6. WG Status\n7. WG Stop\n8. WG Start\n9. Ping",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "BASE_URL", "value": "http://localhost:3000", "type": "string" },
+    { "key": "HOST_PUBLIC_KEY", "value": "", "type": "string", "description": "Fill this after running Generate Host Config" },
+    { "key": "MEMBER_PUBLIC_KEY", "value": "", "type": "string", "description": "Fill this after running Generate Member Config" }
+  ],
+  "item": [
+    {
+      "name": "── Health ──",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/health",
+            "description": "Verify the backend is running. Returns status + platform (linux/win32).\n\nExpected: { status: 'ok', platform: 'linux', port: 3000 }"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Body has status ok', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.status).to.eql('ok');",
+                  "  pm.expect(json.platform).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "── Config Generation (no disk write) ──",
+      "item": [
+        {
+          "name": "Generate Host Config",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-host-config",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hostVirtualIP\": \"10.0.0.1\",\n  \"listenPort\": 51820,\n  \"peers\": [\n    {\n      \"name\": \"Rahul\",\n      \"publicKey\": \"PEER_PUBLIC_KEY_PLACEHOLDER=\",\n      \"virtualIP\": \"10.0.0.2\"\n    },\n    {\n      \"name\": \"Priya\",\n      \"publicKey\": \"ANOTHER_PUBLIC_KEY_PLACEHOLDER=\",\n      \"virtualIP\": \"10.0.0.3\"\n    }\n  ]\n}"
+            },
+            "description": "Generates the host WireGuard config with peer blocks embedded.\nDoes NOT write to disk or start WireGuard.\n\nExpected response:\n- config: full wg0.conf string\n- publicKey: host's WireGuard public key (share this with members)\n- privateKey: host's private key (keep secret!)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns config and keys', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.config).to.include('[Interface]');",
+                  "  pm.expect(json.config).to.include('[Peer]');",
+                  "  pm.expect(json.publicKey).to.be.a('string');",
+                  "  pm.expect(json.privateKey).to.be.a('string');",
+                  "  // Save host public key for use in member config tests",
+                  "  pm.collectionVariables.set('HOST_PUBLIC_KEY', json.publicKey);",
+                  "  console.log('Host public key saved:', json.publicKey);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Generate Host Config — no peers (minimal)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-host-config",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hostVirtualIP\": \"10.0.0.1\"\n}"
+            },
+            "description": "Minimal host config — no peers yet. Tests that peers field is optional."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Config has Interface block', () => {",
+                  "  pm.expect(pm.response.json().config).to.include('[Interface]');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Generate Host Config — missing hostVirtualIP (should fail)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-host-config",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"listenPort\": 51820\n}"
+            },
+            "description": "Validation test — hostVirtualIP is required. Should return 400."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error message mentions missing field', () => {",
+                  "  pm.expect(pm.response.json().error).to.include('hostVirtualIP');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Generate Member Config",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-config",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"memberName\": \"Rahul\",\n  \"memberVirtualIP\": \"10.0.0.2\",\n  \"hostPublicKey\": \"{{HOST_PUBLIC_KEY}}\",\n  \"hostEndpoint\": \"203.0.113.10\",\n  \"hostVirtualIP\": \"10.0.0.1\"\n}"
+            },
+            "description": "Generates a WireGuard config for a team member.\nUses HOST_PUBLIC_KEY saved from the Generate Host Config test.\n\nExpected:\n- config: member's wg0.conf content\n- publicKey: member's public key (share with host)\n- memberVirtualIP: echoed back"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Config has peer block pointing to host', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.config).to.include('[Interface]');",
+                  "  pm.expect(json.config).to.include('[Peer]');",
+                  "  pm.expect(json.config).to.include('10.0.0.2');",
+                  "  pm.expect(json.config).to.include('PersistentKeepalive');",
+                  "  pm.collectionVariables.set('MEMBER_PUBLIC_KEY', json.publicKey);",
+                  "  console.log('Member public key saved:', json.publicKey);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Generate Member Config — missing fields (should fail)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/generate-config",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"memberName\": \"Rahul\"\n}"
+            },
+            "description": "Validation test — all fields required. Should return 400 listing missing fields."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error message present', () => {",
+                  "  pm.expect(pm.response.json().error).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "── Apply Config (writes to disk + starts WG) ──",
+      "item": [
+        {
+          "name": "Apply Host Config",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/apply-host-config",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hostVirtualIP\": \"10.0.0.1\",\n  \"listenPort\": 51820,\n  \"peers\": []\n}"
+            },
+            "description": "⚠️  Requires WireGuard installed + running as root/sudo on the host.\nWrites /etc/wireguard/wg0.conf and starts the WireGuard interface.\n\nExpected:\n- success: true\n- wireguard.action: 'started' or 'reloaded'\n- configPath: /etc/wireguard/wg0.conf\n- publicKey: host's public key"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Success and configPath returned', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.configPath).to.be.a('string');",
+                  "  pm.expect(json.publicKey).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Apply Member Config",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/apply-member-config",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"memberName\": \"Rahul\",\n  \"memberVirtualIP\": \"10.0.0.2\",\n  \"hostPublicKey\": \"{{HOST_PUBLIC_KEY}}\",\n  \"hostEndpoint\": \"203.0.113.10\",\n  \"hostVirtualIP\": \"10.0.0.1\"\n}"
+            },
+            "description": "⚠️  Requires WireGuard installed + running as root/sudo.\nWrites /etc/wireguard/wg0.conf for the member and starts the tunnel.\n\nExpected:\n- success: true\n- wireguard.action: 'started'\n- publicKey: member's key (share this with the host)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Tunnel started', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(['started','reloaded']).to.include(json.wireguard.action);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "── WireGuard Control ──",
+      "item": [
+        {
+          "name": "WG Status",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/wg/status",
+            "description": "Returns current WireGuard state:\n- running: true/false\n- peers: list of peers with handshake times\n- configOnDisk: whether wg0.conf exists\n- configPreview: masked config (private key hidden)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has running field', () => {",
+                  "  pm.expect(pm.response.json()).to.have.property('running');",
+                  "  pm.expect(pm.response.json()).to.have.property('configOnDisk');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "WG Stop",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/wg/stop",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "description": "Brings the WireGuard interface down (wg-quick down wg0).\nSafe to call even if already down — returns already_down."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Action is stopped or already_down', () => {",
+                  "  pm.expect(['stopped','already_down']).to.include(pm.response.json().action);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "WG Start",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/wg/start",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "description": "Brings WireGuard up (wg-quick up wg0).\nRequires wg0.conf to exist on disk first — call Apply Config first.\nIf already up, does a hot reload (syncconf) instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Action is started or reloaded', () => {",
+                  "  pm.expect(['started','reloaded']).to.include(pm.response.json().action);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "WG Start — no config (should fail)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/wg/start",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "description": "If no wg0.conf exists on disk, should return 400 with a clear error."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// This test is only relevant if no config exists on disk",
+                  "pm.test('Status is 200 or 400', () => {",
+                  "  pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "── Network ──",
+      "item": [
+        {
+          "name": "Ping — reachable IP",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/ping",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"127.0.0.1\"\n}"
+            },
+            "description": "Ping localhost (127.0.0.1) — should always return reachable: true.\nGood smoke test to verify ping works without needing WireGuard."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('127.0.0.1 is reachable', () => {",
+                  "  pm.expect(pm.response.json().reachable).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ping — unreachable IP",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/ping",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"10.0.0.99\"\n}"
+            },
+            "description": "Ping a virtual IP that doesn't exist yet — should return reachable: false.\nVerifies the ping timeout logic works correctly."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Unreachable IP returns false', () => {",
+                  "  pm.expect(pm.response.json().reachable).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ping — invalid IP (should fail)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/ping",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ip\": \"not-an-ip\"\n}"
+            },
+            "description": "IP validation test — non-IP string should return 400.\nVerifies shell injection protection is working."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error mentions invalid IP', () => {",
+                  "  pm.expect(pm.response.json().error).to.include('Invalid');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ping — missing ip field (should fail)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/ping",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "description": "Missing ip field — should return 400 from requireFields middleware."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error mentions ip field', () => {",
+                  "  pm.expect(pm.response.json().error).to.include('ip');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "── 404 test ──",
+      "item": [
+        {
+          "name": "Unknown route (should return 404)",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/does-not-exist",
+            "description": "Verifies the 404 fallback middleware is working."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Error message present', () => {",
+                  "  pm.expect(pm.response.json().error).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

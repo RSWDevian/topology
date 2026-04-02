@@ -101,10 +101,30 @@ if [[ "$ROLE" == "host" ]]; then
     log "Docker already present: $(docker --version)"
   fi
 
+  # Docker Compose (try plugin package first, then fallback packages/binary)
   if ! docker compose version &>/dev/null 2>&1; then
-    apt-get install -y docker-compose-plugin > /dev/null
+    warn "docker compose not found, trying to install..."
+
+    apt-get update -qq
+
+    if apt-cache show docker-compose-plugin >/dev/null 2>&1; then
+      apt-get install -y docker-compose-plugin > /dev/null
+    elif apt-cache show docker-compose-v2 >/dev/null 2>&1; then
+      apt-get install -y docker-compose-v2 > /dev/null
+    else
+      # Legacy fallback (provides docker-compose standalone binary)
+      apt-get install -y docker-compose > /dev/null || true
+    fi
+
+    # If only legacy docker-compose exists, expose it as docker CLI plugin
+    if ! docker compose version &>/dev/null 2>&1 && command -v docker-compose >/dev/null 2>&1; then
+      mkdir -p /usr/local/lib/docker/cli-plugins
+      ln -sf "$(command -v docker-compose)" /usr/local/lib/docker/cli-plugins/docker-compose
+    fi
   fi
-  log "Docker Compose: $(docker compose version)"
+
+docker compose version &>/dev/null 2>&1 || error "Docker Compose installation failed"
+log "Docker Compose: $(docker compose version 2>/dev/null || docker-compose --version)"
 fi
 
 # ── 6. Auto-start on boot ────────────────────────────────────
